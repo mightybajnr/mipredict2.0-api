@@ -6,7 +6,12 @@ import cookieParser from "cookie-parser";
 import { missingEnvVars } from "./config/env.js";
 import pool from "./config/db.js";
 import { apiLimiter, authLimiter } from "./middleware/rateLimit.js";
-import { setCsrfCookie, csrfProtection } from "./middleware/csrf.js";
+import {
+  setCsrfCookie,
+  csrfProtection,
+  noStore,
+  csrfTokenBootstrap,
+} from "./middleware/csrf.js";
 import { securityHeaders } from "./middleware/securityHeaders.js";
 import authRouter from "./routes/auth.routes.js";
 import matchesRouter from "./routes/matches.routes.js";
@@ -15,6 +20,8 @@ import leaderboardRouter from "./routes/leaderboard.routes.js";
 import dashboardRouter from "./routes/dashboard.routes.js";
 import usersRouter from "./routes/users.routes.js";
 import adminRouter from "./routes/admin.routes.js";
+import syncRouter from "./routes/sync.routes.js";
+import { startSyncScheduler } from "./services/syncScheduler.js";
 
 dotenv.config();
 
@@ -44,6 +51,8 @@ app.set("trust proxy", trustProxy);
 const allowedOrigins = process.env.FRONTEND_URL.split(",")
   .map((origin) => origin.trim().toLowerCase())
   .filter(Boolean);
+
+app.use("/api", noStore);
 
 app.use(
   cors({
@@ -84,6 +93,8 @@ app.get("/api/health", (req, res) => {
   res.json({ status: "ok" });
 });
 
+app.get("/api/csrf-token", csrfTokenBootstrap);
+
 app.get("/api/health/db", async (req, res) => {
   try {
     const [rows] = await pool.query("SELECT 1 AS connected");
@@ -109,6 +120,7 @@ app.use("/api/leaderboard", leaderboardRouter);
 app.use("/api/dashboard", dashboardRouter);
 app.use("/api/users", usersRouter);
 app.use("/api/admin", adminRouter);
+app.use("/api/admin/sync", syncRouter);
 
 app.use((req, res) => {
   res.status(404).json({ message: "Not found." });
@@ -145,6 +157,10 @@ const port = process.env.PORT || 3000;
 
 const server = app.listen(port, () => {
   console.log(`Mi Predict API listening on port ${port}`);
+
+  // Disabled by default; see SYNC_SCHEDULE_ENABLED. A guarded singleton with a
+  // MySQL advisory lock avoids duplicate loops across restarts/scaling.
+  startSyncScheduler();
 });
 
 async function shutdown() {

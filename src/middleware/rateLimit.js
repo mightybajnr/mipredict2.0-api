@@ -21,3 +21,10 @@ export const authLimiter = createLimiter({
   windowMs: 10 * 60 * 1000,
   limit: 10,
 });
+
+// Manual synchronization triggers make upstream API-Football requests, so keep
+// them tightly throttled even for administrators.
+export const syncLimiter = createLimiter({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+});

@@ -12,8 +12,16 @@ export function computeScore(homeScore, awayScore, predictedHomeScore, predicted
   return actualOutcome === predictedOutcome ? 1 : 0;
 }
 
-export async function finalizeMatchResult({ matchId, homeScore, awayScore }) {
-  const connection = await pool.getConnection();
+export async function finalizeMatchResult({
+  matchId,
+  homeScore,
+  awayScore,
+  providerStatus = null,
+  kickoffAt = null,
+  syncedAt = null,
+  db = pool,
+}) {
+  const connection = await db.getConnection();
 
   try {
     await connection.beginTransaction();
@@ -39,11 +47,18 @@ export async function finalizeMatchResult({ matchId, homeScore, awayScore }) {
       );
     }
 
+    // Scoring is recomputed from the authoritative server-side scores every
+    // time, which keeps finalization idempotent (re-running awards the same
+    // points) and provides a controlled recalculation path for corrected
+    // provider results. Provider metadata is written in the same transaction.
     await connection.execute(
       `UPDATE matches
-          SET home_score = ?, away_score = ?, status = 'finished'
+          SET home_score = ?, away_score = ?, status = 'finished',
+              provider_status = COALESCE(?, provider_status),
+              kickoff_at = COALESCE(?, kickoff_at),
+              last_synced_at = COALESCE(?, last_synced_at)
         WHERE id = ?`,
-      [homeScore, awayScore, matchId]
+      [homeScore, awayScore, providerStatus, kickoffAt, syncedAt, matchId]
     );
 
     const [predictions] = await connection.execute(

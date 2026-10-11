@@ -27,13 +27,19 @@ async function createTables() {
         ) NOT NULL DEFAULT 'scheduled',
         home_score TINYINT UNSIGNED NULL,
         away_score TINYINT UNSIGNED NULL,
+        provider VARCHAR(50) NULL,
+        external_fixture_id VARCHAR(64) NULL,
+        provider_status VARCHAR(40) NULL,
+        last_synced_at DATETIME NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
           ON UPDATE CURRENT_TIMESTAMP,
 
         PRIMARY KEY (id),
+        UNIQUE KEY uniq_matches_external_fixture (external_fixture_id),
         INDEX idx_matches_kickoff (kickoff_at),
-        INDEX idx_matches_status_kickoff (status, kickoff_at)
+        INDEX idx_matches_status_kickoff (status, kickoff_at),
+        INDEX idx_matches_provider_status (provider, provider_status)
       ) ENGINE=InnoDB
     `);
 

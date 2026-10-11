@@ -1,14 +1,15 @@
+import helmet from "helmet";
+
 const isProd = process.env.NODE_ENV === "production";
 
-export function securityHeaders(req, res, next) {
-  res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("X-Frame-Options", "DENY");
-  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
-  res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
-
-  if (isProd) {
-    res.setHeader("Strict-Transport-Security", "max-age=63072000");
-  }
-
-  return next();
-}
+// Helmet for the JSON API. CSP is disabled because this origin only ever
+// serves JSON (the SPA is served from a separate origin with its own CSP),
+// and CORP is relaxed so mipredict.com can consume the API cross-origin.
+export const securityHeaders = helmet({
+  contentSecurityPolicy: false,
+  crossOriginResourcePolicy: { policy: "cross-origin" },
+  crossOriginEmbedderPolicy: false,
+  referrerPolicy: { policy: "strict-origin-when-cross-origin" },
+  frameguard: { action: "deny" },
+  hsts: isProd ? { maxAge: 63072000, includeSubDomains: true } : false,
+});

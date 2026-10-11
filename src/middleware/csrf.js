@@ -49,6 +49,22 @@ export function csrfTokenFrom(req, res) {
   return res.locals?.csrfToken || req.cookies?.[CSRF_COOKIE_NAME] || null;
 }
 
+// Token-bearing responses must never be cached by a CDN/proxy. A cached
+// response would replay one user's csrfToken (and its Set-Cookie) to another
+// client, producing a token that can never match the caller's own cookie and
+// therefore a permanent "Invalid or missing CSRF token" on the first unsafe
+// request (e.g. login/register).
+export function noStore(req, res, next) {
+  res.set("Cache-Control", "no-store");
+  next();
+}
+
+// Dedicated, uncached bootstrap for cross-origin clients that cannot read the
+// XSRF-TOKEN cookie (e.g. mipredict.com consuming api.mipredict.com).
+export function csrfTokenBootstrap(req, res) {
+  res.json({ csrfToken: csrfTokenFrom(req, res) });
+}
+
 export function csrfProtection(req, res, next) {
   if (!UNSAFE_METHODS.has(req.method)) {
     return next();
