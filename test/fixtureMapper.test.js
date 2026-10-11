@@ -6,6 +6,8 @@ import {
   normalizeFixture,
   normalizeTeamName,
   normalizeCompetitionName,
+  normalizeLogoUrl,
+  deriveSeason,
   parseScore,
   toUtcDateTime,
   nowUtcDateTime,
@@ -101,6 +103,35 @@ describe("score and name normalization", () => {
   });
 });
 
+describe("normalizeLogoUrl", () => {
+  it("keeps absolute http(s) URLs", () => {
+    assert.equal(
+      normalizeLogoUrl("https://media.api-sports.io/football/teams/529.png"),
+      "https://media.api-sports.io/football/teams/529.png"
+    );
+    assert.equal(normalizeLogoUrl("http://example.com/a.png"), "http://example.com/a.png");
+  });
+
+  it("rejects unsafe, relative, empty and oversized values", () => {
+    assert.equal(normalizeLogoUrl("javascript:alert(1)"), null);
+    assert.equal(normalizeLogoUrl("data:image/png;base64,AAAA"), null);
+    assert.equal(normalizeLogoUrl("/relative/logo.png"), null);
+    assert.equal(normalizeLogoUrl(""), null);
+    assert.equal(normalizeLogoUrl(null), null);
+    assert.equal(normalizeLogoUrl(`https://x.com/${"a".repeat(300)}.png`), null);
+  });
+});
+
+describe("deriveSeason", () => {
+  it("uses the starting year of the European season", () => {
+    assert.equal(deriveSeason(new Date("2025-08-15T00:00:00Z")), 2025);
+    assert.equal(deriveSeason(new Date("2025-12-31T00:00:00Z")), 2025);
+    assert.equal(deriveSeason(new Date("2026-02-15T00:00:00Z")), 2025);
+    assert.equal(deriveSeason(new Date("2026-06-30T00:00:00Z")), 2025);
+    assert.equal(deriveSeason(new Date("2026-07-01T00:00:00Z")), 2026);
+  });
+});
+
 describe("normalizeFixture", () => {
   const raw = {
     fixture: {
@@ -110,8 +141,8 @@ describe("normalizeFixture", () => {
     },
     league: { id: 39, name: "  Premier   League ", season: 2025 },
     teams: {
-      home: { id: 1, name: "Arsenal" },
-      away: { id: 2, name: "Chelsea" },
+      home: { id: 1, name: "Arsenal", logo: "https://media.api-sports.io/football/teams/42.png" },
+      away: { id: 2, name: "Chelsea", logo: "https://media.api-sports.io/football/teams/49.png" },
     },
     goals: { home: null, away: null },
   };
@@ -128,6 +159,26 @@ describe("normalizeFixture", () => {
     assert.equal(normalized.providerStatus, "NS");
     assert.equal(normalized.homeScore, null);
     assert.equal(normalized.awayScore, null);
+    assert.equal(
+      normalized.homeTeamLogo,
+      "https://media.api-sports.io/football/teams/42.png"
+    );
+    assert.equal(
+      normalized.awayTeamLogo,
+      "https://media.api-sports.io/football/teams/49.png"
+    );
+  });
+
+  it("nulls logos when absent or unsafe", () => {
+    const normalized = normalizeFixture({
+      ...raw,
+      teams: {
+        home: { id: 1, name: "Arsenal" },
+        away: { id: 2, name: "Chelsea", logo: "javascript:alert(1)" },
+      },
+    });
+    assert.equal(normalized.homeTeamLogo, null);
+    assert.equal(normalized.awayTeamLogo, null);
   });
 
   it("captures scores for finished fixtures", () => {

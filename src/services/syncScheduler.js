@@ -1,7 +1,7 @@
 import pool from "../config/db.js";
 import { apiFootballConfig } from "../config/apiFootball.js";
 import { apiFootballClient } from "./apiFootballClient.js";
-import { importFixtures } from "./fixtureSyncService.js";
+import { importFixtureWindow } from "./fixtureSyncService.js";
 import { syncResults } from "./resultSyncService.js";
 
 // Optional in-process scheduler. Disabled unless SYNC_SCHEDULE_ENABLED=true.
@@ -35,6 +35,20 @@ export function startSyncScheduler({
 
   started = true;
 
+  // Run once immediately so a deploy (or a fresh restart) populates fixtures
+  // and live scores without waiting a whole interval. Previously the first run
+  // waited up to SYNC_FIXTURES_INTERVAL_MINUTES and reset on every restart.
+  runGuarded(
+    "results",
+    () => syncResults({ mode: "live", db, client, logger }),
+    logger
+  );
+  runGuarded(
+    "fixtures-window",
+    () => importFixtureWindow({ db, client, logger }),
+    logger
+  );
+
   const resultsTimer = setInterval(
     () =>
       runGuarded("results", () => syncResults({ mode: "live", db, client, logger }), logger),
@@ -42,7 +56,7 @@ export function startSyncScheduler({
   );
 
   const fixturesTimer = setInterval(
-    () => runGuarded("fixtures", () => importFixtures({ db, client, logger }), logger),
+    () => runGuarded("fixtures-window", () => importFixtureWindow({ db, client, logger }), logger),
     config.fixturesSyncIntervalMs
   );
 

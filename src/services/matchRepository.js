@@ -24,8 +24,8 @@ export function createMatchRepository(db = pool) {
         `INSERT INTO matches
            (home_team, away_team, competition, kickoff_at, status,
             home_score, away_score, provider, external_fixture_id,
-            provider_status, last_synced_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP())`,
+            provider_status, home_team_logo, away_team_logo, last_synced_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP())`,
         [
           fixture.homeTeam,
           fixture.awayTeam,
@@ -37,6 +37,8 @@ export function createMatchRepository(db = pool) {
           PROVIDER,
           fixture.externalFixtureId,
           fixture.providerStatus,
+          fixture.homeTeamLogo ?? null,
+          fixture.awayTeamLogo ?? null,
         ]
       );
 
@@ -60,6 +62,16 @@ export function createMatchRepository(db = pool) {
         fields.status,
         fields.providerStatus,
       ];
+
+      if (fields.homeTeamLogo !== undefined) {
+        sets.push("home_team_logo = ?");
+        params.push(fields.homeTeamLogo ?? null);
+      }
+
+      if (fields.awayTeamLogo !== undefined) {
+        sets.push("away_team_logo = ?");
+        params.push(fields.awayTeamLogo ?? null);
+      }
 
       if (fields.updateScores) {
         sets.push("home_score = ?", "away_score = ?");

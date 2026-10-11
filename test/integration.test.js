@@ -29,6 +29,11 @@ function utcDateString(offsetDays) {
   return date.toISOString().slice(0, 19).replace("T", " ");
 }
 
+function utcDateTimeFromMinutes(offsetMinutes) {
+  const date = new Date(Date.now() + offsetMinutes * 60 * 1000);
+  return date.toISOString().slice(0, 19).replace("T", " ");
+}
+
 async function createUser(name, email) {
   const [result] = await pool.execute(
     "INSERT INTO users (name, email, password_hash) VALUES (?, ?, ?)",
@@ -55,7 +60,10 @@ test("predictions, scoring and dashboard integration", async (t) => {
     homeTeam: "ITT Home",
     awayTeam: "ITT Away",
     competition: "ITT League",
-    kickoffAt: utcDateString(2),
+    // Nearest upcoming kickoff so this match is deterministically inside the
+    // dashboard's global `LIMIT 5` upcoming preview, independent of any real
+    // fixtures imported by the sync pipeline.
+    kickoffAt: utcDateTimeFromMinutes(120),
     status: "scheduled",
   });
   const pastMatch = await createMatch({

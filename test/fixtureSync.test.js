@@ -3,8 +3,12 @@ import assert from "node:assert/strict";
 
 import {
   importFixtures,
+  importFixtureWindow,
   persistFixtures,
   resolveImportTargets,
+  resolveWindow,
+  resolveWindowTargets,
+  buildWindowDates,
 } from "../src/services/fixtureSyncService.js";
 import { ApiFootballError } from "../src/services/apiFootballClient.js";
 
@@ -281,6 +285,162 @@ describe("importFixtures", () => {
     const result = await importFixtures({
       leagues: ["39"],
       seasons: ["2025"],
+      client,
+      db: createFakeDb(),
+      repository: createFakeRepository(),
+      logger: silent,
+    });
+
+    assert.equal(result.errors, 1);
+    assert.equal(result.inserted, 0);
+    assert.equal(result.status, "error");
+  });
+});
+
+describe("resolveWindow", () => {
+  it("returns an inclusive UTC date range around now", () => {
+    assert.deepEqual(
+      resolveWindow({ daysBack: 1, daysForward: 7, now: new Date("2025-08-15T12:00:00Z") }),
+      { from: "2025-08-14", to: "2025-08-22" }
+    );
+  });
+
+  it("falls back to safe defaults for invalid offsets", () => {
+    assert.deepEqual(
+      resolveWindow({ daysBack: -3, daysForward: "x", now: new Date("2025-08-15T12:00:00Z") }),
+      { from: "2025-08-14", to: "2025-08-22" }
+    );
+  });
+});
+
+describe("buildWindowDates", () => {
+  it("enumerates every inclusive UTC day", () => {
+    assert.deepEqual(buildWindowDates({ from: "2025-08-14", to: "2025-08-17" }), [
+      "2025-08-14",
+      "2025-08-15",
+      "2025-08-16",
+      "2025-08-17",
+    ]);
+  });
+
+  it("returns an empty list for malformed or inverted ranges", () => {
+    assert.deepEqual(buildWindowDates({ from: "nope", to: "2025-08-17" }), []);
+    assert.deepEqual(buildWindowDates({ from: "2025-08-17", to: "2025-08-14" }), []);
+  });
+});
+
+describe("resolveWindowTargets", () => {
+  const saved = {
+    leagues: process.env.API_FOOTBALL_LEAGUES,
+    seasons: process.env.API_FOOTBALL_SEASONS,
+  };
+
+  beforeEach(() => {
+    delete process.env.API_FOOTBALL_LEAGUES;
+    delete process.env.API_FOOTBALL_SEASONS;
+  });
+
+  afterEach(() => {
+    process.env.API_FOOTBALL_LEAGUES = saved.leagues;
+    process.env.API_FOOTBALL_SEASONS = saved.seasons;
+  });
+
+  it("prefers explicit targets, then config, then fallback leagues + derived season", () => {
+    assert.deepEqual(
+      resolveWindowTargets({ leagues: ["99"], seasons: ["2024"], now: new Date("2025-08-15T00:00:00Z") }),
+      { leagueList: ["99"], seasonList: ["2024"] }
+    );
+
+    process.env.API_FOOTBALL_LEAGUES = "39,140";
+    process.env.API_FOOTBALL_SEASONS = "2025";
+    assert.deepEqual(resolveWindowTargets({ now: new Date("2025-08-15T00:00:00Z") }), {
+      leagueList: ["39", "140"],
+      seasonList: ["2025"],
+    });
+
+    delete process.env.API_FOOTBALL_LEAGUES;
+    delete process.env.API_FOOTBALL_SEASONS;
+    assert.deepEqual(resolveWindowTargets({ now: new Date("2026-02-15T00:00:00Z") }), {
+      leagueList: ["39", "140", "135", "78", "61", "2"],
+      seasonList: ["2025"],
+    });
+  });
+});
+
+describe("importFixtureWindow", () => {
+  beforeEach(() => {
+    delete process.env.API_FOOTBALL_LEAGUES;
+    delete process.env.API_FOOTBALL_SEASONS;
+  });
+
+  it("queries each day by date and persists matching fixtures", async () => {
+    const db = createFakeDb();
+    const repository = createFakeRepository();
+    const client = createFakeClient({ fixtures: [rawFixture(1), rawFixture(2)] });
+
+    const result = await importFixtureWindow({
+      daysBack: 0,
+      daysForward: 0,
+      leagues: ["39"],
+      now: new Date("2025-08-15T00:00:00Z"),
+      client,
+      db,
+      repository,
+      logger: silent,
+    });
+
+    assert.equal(result.status, "success");
+    assert.equal(result.inserted, 2);
+    assert.deepEqual(client.calls, [{ date: "2025-08-15" }]);
+    assert.equal(db.logs.length, 1);
+    assert.equal(db.logs[0][0], "fixtures-window");
+  });
+
+  it("keeps only fixtures belonging to the configured competitions", async () => {
+    const otherLeague = rawFixture(3);
+    otherLeague.league = { id: 999, name: "Obscure League", season: 2025 };
+    const client = createFakeClient({ fixtures: [rawFixture(1), otherLeague] });
+
+    const result = await importFixtureWindow({
+      daysBack: 0,
+      daysForward: 0,
+      leagues: ["39"],
+      now: new Date("2025-08-15T00:00:00Z"),
+      client,
+      db: createFakeDb(),
+      repository: createFakeRepository(),
+      logger: silent,
+    });
+
+    assert.equal(result.competitions[0].fetched, 2);
+    assert.equal(result.competitions[0].fixtures, 1);
+    assert.equal(result.inserted, 1);
+  });
+
+  it("throws MISSING_KEY when unconfigured", async () => {
+    await assert.rejects(
+      () =>
+        importFixtureWindow({
+          daysBack: 0,
+          daysForward: 0,
+          client: createFakeClient({ configured: false }),
+          db: createFakeDb(),
+          repository: createFakeRepository(),
+          logger: silent,
+        }),
+      (err) => err instanceof ApiFootballError && err.code === "MISSING_KEY"
+    );
+  });
+
+  it("degrades gracefully on provider errors", async () => {
+    const client = createFakeClient({
+      error: new ApiFootballError("PROVIDER_ERROR", "upstream down"),
+    });
+
+    const result = await importFixtureWindow({
+      daysBack: 0,
+      daysForward: 0,
+      leagues: ["39"],
       client,
       db: createFakeDb(),
       repository: createFakeRepository(),

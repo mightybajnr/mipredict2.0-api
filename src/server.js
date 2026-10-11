@@ -22,6 +22,11 @@ import usersRouter from "./routes/users.routes.js";
 import adminRouter from "./routes/admin.routes.js";
 import syncRouter from "./routes/sync.routes.js";
 import { startSyncScheduler } from "./services/syncScheduler.js";
+import { ensureApiFootballSchema } from "./services/schemaService.js";
+import { apiFootballConfig } from "./config/apiFootball.js";
+import { apiFootballClient } from "./services/apiFootballClient.js";
+import { importFixtureWindow } from "./services/fixtureSyncService.js";
+import { syncResults } from "./services/resultSyncService.js";
 
 dotenv.config();
 
@@ -158,10 +163,60 @@ const port = process.env.PORT || 3000;
 const server = app.listen(port, () => {
   console.log(`Mi Predict API listening on port ${port}`);
 
+  bootstrap();
+});
+
+// Guarantees the API-Football schema before any sync runs, then starts the
+// optional scheduler and/or the one-shot startup import.
+async function bootstrap() {
+  try {
+    const result = await ensureApiFootballSchema();
+
+    if (result.applied.length) {
+      console.log(`[schema] applied: ${result.applied.join(", ")}`);
+    }
+  } catch (err) {
+    // Never crash the API because of a provisioning problem; sync endpoints
+    // will surface a clear error until the schema is available.
+    console.error(`[schema] ensure failed: ${err.code || err.message}`);
+  }
+
   // Disabled by default; see SYNC_SCHEDULE_ENABLED. A guarded singleton with a
   // MySQL advisory lock avoids duplicate loops across restarts/scaling.
   startSyncScheduler();
-});
+
+  maybeRunStartupSync();
+}
+
+// Populates real fixtures on a fresh production deploy even when the optional
+// in-process scheduler is disabled. Never runs in tests/dev (NODE_ENV guard),
+// does nothing without an API key, and defers to the scheduler when enabled.
+function maybeRunStartupSync() {
+  const config = apiFootballConfig();
+
+  if (process.env.NODE_ENV !== "production") return;
+  if (!config.startupSyncEnabled) return;
+  if (!apiFootballClient.isConfigured()) return;
+  if (config.scheduleEnabled) return;
+
+  runStartupSync().catch((err) => {
+    console.error(`[startup-sync] failed: ${err.code || err.message}`);
+  });
+}
+
+async function runStartupSync() {
+  console.log("[startup-sync] importing fixtures for the current window...");
+
+  const fixtures = await importFixtureWindow();
+
+  console.log(
+    `[startup-sync] fixtures inserted=${fixtures.inserted} updated=${fixtures.updated} errors=${fixtures.errors} (${fixtures.from}..${fixtures.to})`
+  );
+
+  await syncResults({ mode: "live" }).catch((err) => {
+    console.error(`[startup-sync] results failed: ${err.code || err.message}`);
+  });
+}
 
 async function shutdown() {
   await pool.end();

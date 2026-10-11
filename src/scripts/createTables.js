@@ -31,6 +31,8 @@ async function createTables() {
         external_fixture_id VARCHAR(64) NULL,
         provider_status VARCHAR(40) NULL,
         last_synced_at DATETIME NULL,
+        home_team_logo VARCHAR(255) NULL,
+        away_team_logo VARCHAR(255) NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
           ON UPDATE CURRENT_TIMESTAMP,

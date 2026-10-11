@@ -37,6 +37,7 @@ The server fails fast at startup with a clear message if `DB_HOST`, `DB_PORT`, `
 | `SYNC_SCHEDULE_ENABLED` | `false` | enable the optional in-process scheduler |
 | `SYNC_INTERVAL_MINUTES` | `30` | live-result sync interval (scheduler only) |
 | `SYNC_FIXTURES_INTERVAL_MINUTES` | `1440` | fixture import interval (scheduler only) |
+| `SYNC_ON_STARTUP` | `true` | production-only one-shot fixture window import at boot |
 
 ## Scripts
 
@@ -80,9 +81,13 @@ Fixtures, statuses and scores are imported from **API-Football v3** (`https://v3
 
 ### Database migration
 
-`npm run db:migrate` adds these columns to `matches` (idempotent, never drops anything): `provider`, `external_fixture_id`, `provider_status`, `last_synced_at`. It also adds a unique index on `external_fixture_id` (many `NULL`s are allowed, so manual matches are unaffected) and creates the `sync_logs` table. Local match ids, predictions and foreign keys are never changed.
+The server **self-heals** the schema on boot: `ensureApiFootballSchema()` (`src/services/schemaService.js`) runs at startup and on `npm run db:migrate`. Both are idempotent and non-destructive — only `ADD COLUMN` / `ADD INDEX` / `CREATE TABLE IF NOT EXISTS`, guarded by `INFORMATION_SCHEMA` and safe against concurrent starts.
 
-Matching for imports/updates is by (`provider = 'api-football'`, `external_fixture_id`), so manually created matches are never modified or deleted. Existing finished scores are preserved on re-import.
+It adds these columns to `matches`: `provider`, `external_fixture_id`, `provider_status`, `last_synced_at`, `home_team_logo`, `away_team_logo`. It also adds a unique index on `external_fixture_id` (many `NULL`s are allowed, so manual matches are unaffected) and creates the `sync_logs` table. Local match ids, predictions and foreign keys are never changed.
+
+> A production `matches` table created before API-Football support exists will be missing these columns; without the migration every import fails with `Unknown column 'provider'`. Startup self-heal means a redeploy fixes this automatically — `npm run db:migrate` remains available for the CLI/`db:setup` path.
+
+Matching for imports/updates is by (`provider = 'api-football'`, `external_fixture_id`), so manually created matches are never modified or deleted. Existing finished scores are preserved on re-import. Team logos (`teams.home.logo` / `teams.away.logo`) are stored only when they are absolute `http(s)` URLs and are rendered by the frontend with an initials fallback.
 
 ### Status mapping
 
@@ -121,9 +126,24 @@ These endpoints are behind `requireAuth` + `requireAdmin`, the global CSRF check
 
 An external scheduler is recommended on Render (a **Cron Job** that `curl`s the protected sync endpoints, or a platform cron). This avoids multiple loops when the web service restarts or scales. If you prefer in-process scheduling, set `SYNC_SCHEDULE_ENABLED=true`; a module-level singleton plus a MySQL `GET_LOCK('mipredict_sync', 0)` advisory lock guarantee only one instance syncs at a time. It is off by default.
 
+When the scheduler is enabled it fires **immediately on startup** (then on the interval), so fixtures/results do not wait a full interval after a restart. Independently, when `NODE_ENV=production` and `SYNC_ON_STARTUP` is not `false`, the server performs a **one-shot fixture window import at boot** (never in tests/dev), so a fresh deploy shows real fixtures even if the scheduler is disabled.
+
+#### Date-window import (not league × season)
+
+The automatic path (`importFixtureWindow`) queries the provider **one day at a time** (`?date=YYYY-MM-DD`) across a rolling window (default *today-1 .. today+7*) and keeps only the configured/default competitions. This is intentional:
+
+- It is one request per day instead of `leagues × seasons`, and a single day response already includes every competition.
+- It is the **only model that works on the free plan**: a free plan can query dates near "now" but rejects arbitrary seasons (`Free plans do not have access to this season, try from 2022 to 2024`) and out-of-window dates (`...try from <today-1> to <today+1>`). Days outside the allowed range are skipped gracefully and logged as errors; the days inside it still import.
+
+Set `API_FOOTBALL_LEAGUES` to control which competitions are kept (ids, e.g. `39,140,135,78,61,2`). If unset, a small default set (top-5 European leagues + Champions League) is used. Manual `POST /api/admin/sync/fixtures` still accepts explicit `{ leagues, seasons }` for full-season imports on paid plans.
+
+`GET /api/matches` supports `status`, `competition`, `team`, `date` (`YYYY-MM-DD`), `page` and `limit` for server-side filtering.
+
 ### Expected request usage (free plan is limited)
 
-With `SYNC_INTERVAL_MINUTES=30`, live sync is **48 requests/day**; daily fixture import is (`leagues × seasons`) requests/day. `API_FOOTBALL_CACHE_TTL_MS` deduplicates identical upstream calls within the window and the client never retries indefinitely. Start conservatively and watch `GET /api/admin/sync/status`.
+With `SYNC_INTERVAL_MINUTES=30`, live sync is **48 requests/day**. The boot/window fixture import is **one request per day in the window** (default 9), plus the scheduled interval. `API_FOOTBALL_CACHE_TTL_MS` deduplicates identical upstream calls within the window and the client never retries indefinitely. Start conservatively and watch `GET /api/admin/sync/status`.
+
+> **Free-plan limit:** API-Football's free plan only serves a narrow *date* window around "now" and seasons 2022–2024. If fixtures still do not appear, confirm the plan/season with `GET /api/admin/sync/status` and the `sync_logs` `message`/`error_count`; the provider error text says exactly which range is allowed.
 
 ### Public data stays local
 
@@ -134,8 +154,8 @@ With `SYNC_INTERVAL_MINUTES=30`, live sync is **48 requests/day**; daily fixture
 - **Web Service**, runtime Node, root directory `server`, build `npm install`, start `npm start`.
 - Health check: `GET /api/health/db`.
 - Set `NODE_ENV=production`, `FRONTEND_URL=https://mipredict.com`, Aiven DB vars, `DB_CA_CERT` (the Aiven `ca.pem` contents), `ADMIN_EMAILS`, `TRUST_PROXY=1`.
-- For API-Football: add `API_FOOTBALL_KEY` (Render env var — never commit it), `API_FOOTBALL_BASE_URL`, `API_FOOTBALL_LEAGUES`, `API_FOOTBALL_SEASONS`. Optionally `SYNC_SCHEDULE_ENABLED` + intervals, or use a Render Cron Job against the sync endpoints.
-- Run `npm run db:migrate` once (Render Shell) to add the provider columns and `sync_logs`.
+- For API-Football: add `API_FOOTBALL_KEY` (Render env var — never commit it), `API_FOOTBALL_BASE_URL`, and optionally `API_FOOTBALL_LEAGUES` / `API_FOOTBALL_SEASONS`. Optionally `SYNC_SCHEDULE_ENABLED` + intervals, or use a Render Cron Job against the sync endpoints; `SYNC_ON_STARTUP` (default on in production) imports the current date window at boot.
+- The provider schema is applied automatically at startup; `npm run db:migrate` (Render Shell) is still available and idempotent.
 - Do not run `npm run db:setup` or any seeding against production without an approved migration plan.
 
 ## Tests

@@ -24,6 +24,8 @@ router.get("/", async (req, res, next) => {
     const result = await listMatches({
       status,
       competition: req.query.competition,
+      team: req.query.team,
+      date: req.query.date,
       page: req.query.page,
       limit: req.query.limit,
     });

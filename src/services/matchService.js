@@ -8,7 +8,9 @@ export class PredictionError extends Error {
   }
 }
 
-const MATCH_COLUMNS = `m.id, m.home_team, m.away_team, m.competition, m.kickoff_at,
+const MATCH_COLUMNS = `m.id, m.home_team, m.away_team,
+                       m.home_team_logo, m.away_team_logo,
+                       m.competition, m.kickoff_at,
                        m.status, m.home_score, m.away_score`;
 
 const MATCH_FILTERS = {
@@ -43,16 +45,17 @@ function escapeLike(value) {
   return String(value).replace(/[\\%_]/g, (char) => `\\${char}`);
 }
 
-export async function listMatches({
+const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+// Pure helper that turns validated query inputs into a WHERE clause and
+// parameter list. Kept separate so it can be unit tested without a database.
+export function buildMatchFilter({
   status = "upcoming",
   competition,
-  page = 1,
-  limit = 50,
+  team,
+  date,
 } = {}) {
-  const pageNum = toPositiveInt(page, 1);
-  const limitNum = Math.min(100, toPositiveInt(limit, 50));
   const filter = MATCH_FILTERS[normalizeMatchFilter(status)];
-
   const conditions = [filter.where];
   const params = [];
 
@@ -61,7 +64,44 @@ export async function listMatches({
     params.push(`%${escapeLike(competition)}%`);
   }
 
-  const whereClause = `WHERE ${conditions.join(" AND ")}`;
+  if (team) {
+    conditions.push(
+      "(m.home_team LIKE ? ESCAPE '\\\\' OR m.away_team LIKE ? ESCAPE '\\\\')"
+    );
+
+    const like = `%${escapeLike(team)}%`;
+    params.push(like, like);
+  }
+
+  if (date && ISO_DATE_PATTERN.test(String(date))) {
+    conditions.push("DATE(m.kickoff_at) = ?");
+    params.push(String(date));
+  }
+
+  return {
+    where: `WHERE ${conditions.join(" AND ")}`,
+    params,
+    order: filter.order,
+  };
+}
+
+export async function listMatches({
+  status = "upcoming",
+  competition,
+  team,
+  date,
+  page = 1,
+  limit = 50,
+} = {}) {
+  const pageNum = toPositiveInt(page, 1);
+  const limitNum = Math.min(100, toPositiveInt(limit, 50));
+  const { where: whereClause, params, order } = buildMatchFilter({
+    status,
+    competition,
+    team,
+    date,
+  });
+
   const offset = (pageNum - 1) * limitNum;
 
   const [[{ total }]] = await pool.query(
@@ -75,7 +115,7 @@ export async function listMatches({
     `SELECT ${MATCH_COLUMNS}
        FROM matches m
        ${whereClause}
-      ORDER BY ${filter.order}
+      ORDER BY ${order}
       LIMIT ? OFFSET ?`,
     [...params, limitNum, offset]
   );
@@ -95,8 +135,9 @@ export function listUpcomingMatches() {
 
 export async function getMatchById(id) {
   const [rows] = await pool.execute(
-    `SELECT id, home_team, away_team, competition, kickoff_at, status,
-            home_score, away_score, created_at, updated_at
+    `SELECT id, home_team, away_team, home_team_logo, away_team_logo,
+            competition, kickoff_at, status, home_score, away_score,
+            created_at, updated_at
        FROM matches
       WHERE id = ?
       LIMIT 1`,

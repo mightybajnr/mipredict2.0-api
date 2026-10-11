@@ -5,6 +5,7 @@ export const PROVIDER = "api-football";
 
 export const TEAM_MAX_LENGTH = 100;
 export const COMPETITION_MAX_LENGTH = 120;
+export const LOGO_MAX_LENGTH = 255;
 export const MAX_GOALS = 255;
 
 // Maps API-Football short status codes onto the application's existing status
@@ -60,6 +61,27 @@ export function normalizeCompetitionName(value) {
   return cleaned.slice(0, COMPETITION_MAX_LENGTH);
 }
 
+// Only absolute http(s) logo URLs are stored; anything else (or oversized
+// values) becomes null so a hostile/odd provider payload can never inject a
+// dangerous scheme into the `src` attribute rendered by the frontend.
+export function normalizeLogoUrl(value) {
+  const cleaned = String(value || "").trim();
+  if (!cleaned || cleaned.length > LOGO_MAX_LENGTH) return null;
+  return /^https?:\/\//i.test(cleaned) ? cleaned : null;
+}
+
+// Derives the API-Football season (its start year) for a date. European
+// seasons start in July: months July-December belong to the current year,
+// January-June still belong to the previous year's season.
+export function deriveSeason(date = new Date()) {
+  const when = date instanceof Date ? date : new Date(date);
+  const safe = Number.isNaN(when.getTime()) ? new Date() : when;
+  const year = safe.getUTCFullYear();
+  const month = safe.getUTCMonth() + 1;
+
+  return month >= 7 ? year : year - 1;
+}
+
 // Converts an ISO-8601 timestamp (with any offset) into a UTC
 // "YYYY-MM-DD HH:MM:SS" string suitable for the DATETIME column.
 export function toUtcDateTime(value) {
@@ -106,6 +128,8 @@ export function normalizeFixture(raw) {
     provider: PROVIDER,
     homeTeam: normalizeTeamName(teams.home?.name) || "Unknown",
     awayTeam: normalizeTeamName(teams.away?.name) || "Unknown",
+    homeTeamLogo: normalizeLogoUrl(teams.home?.logo),
+    awayTeamLogo: normalizeLogoUrl(teams.away?.logo),
     competition: normalizeCompetitionName(league.name) || "Unknown",
     leagueId: league.id != null ? Number(league.id) : null,
     season: league.season != null ? Number(league.season) : null,
