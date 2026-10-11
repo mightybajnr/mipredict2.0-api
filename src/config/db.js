@@ -1,8 +1,31 @@
-const mysql = require("mysql2/promise");
-const fs = require("node:fs");
-const path = require("node:path");
+import "dotenv/config";
+import mysql from "mysql2/promise";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const caPath = path.join(__dirname, "../../certs/ca.pem");
+import { missingEnvVars } from "./env.js";
+
+const missing = missingEnvVars("db");
+
+if (missing.length) {
+  throw new Error(
+    `[env] Missing required database environment variable(s): ${missing.join(
+      ", "
+    )}.`
+  );
+}
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+function loadCaCert() {
+  if (process.env.DB_CA_CERT) {
+    return process.env.DB_CA_CERT.replace(/\\n/g, "\n");
+  }
+
+  const caPath = path.join(__dirname, "../../certs/ca.pem");
+  return fs.readFileSync(caPath, "utf8");
+}
 
 const pool = mysql.createPool({
   host: process.env.DB_HOST,
@@ -12,13 +35,15 @@ const pool = mysql.createPool({
   database: process.env.DB_NAME,
 
   ssl: {
-    ca: fs.readFileSync(caPath, "utf8"),
+    ca: loadCaCert(),
     rejectUnauthorized: true,
   },
+
+  timezone: "Z",
 
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
 });
 
-module.exports = pool;
+export default pool;
