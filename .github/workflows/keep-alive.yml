@@ -1,0 +1,41 @@
+name: Keep-alive ping
+
+# Keeps the Aiven free-tier MySQL service from being powered off for
+# inactivity, and keeps Render's free web service warm. Hitting
+# /api/health/db runs "SELECT 1" against the DB, which counts as activity.
+#
+# Notes:
+# - Scheduled workflows run only on the default branch.
+# - GitHub may delay scheduled runs; this is a best-effort backup to a real
+#   uptime monitor (e.g. UptimeRobot), which should be the primary keep-alive.
+# - GitHub disables scheduled workflows after 60 days of repository inactivity.
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping database health endpoint
+        run: |
+          URL="https://api.mipredict.com/api/health/db?keepalive=$(date +%s)"
+          for attempt in 1 2 3 4 5; do
+            code=$(curl -sS -o /tmp/body -w "%{http_code}" \
+              --max-time 90 --retry 2 --retry-delay 5 "$URL" || echo "000")
+            echo "attempt ${attempt}: HTTP ${code}"
+            if [ "$code" = "200" ] && grep -q '"connected"' /tmp/body; then
+              echo "Database is awake."
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "Keep-alive failed: the API/DB did not respond after 5 attempts."
+          echo "If the Aiven service was powered off, power it on in the console;"
+          echo "this ping cannot wake a powered-off service automatically."
+          exit 1
